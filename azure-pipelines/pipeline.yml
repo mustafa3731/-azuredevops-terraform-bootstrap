@@ -1,0 +1,57 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr: none
+
+variables:
+  # Name of your Azure RM service connection (created in Project Settings > Service Connections)
+  AZURE_SERVICE_CONNECTION: 'sc-azure-oidc'
+  TF_VERSION: '1.7.5'
+  TF_DIR: 'terraform'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- checkout: self
+
+# Install Terraform
+- bash: |
+    set -e
+    echo "Installing Terraform ${TF_VERSION}..."
+    TFILE="terraform_${TF_VERSION}_linux_amd64.zip"
+    wget -q https://releases.hashicorp.com/terraform/${TF_VERSION}/${TFILE}
+    unzip -q ${TFILE}
+    sudo mv terraform /usr/local/bin/
+    terraform -version
+  displayName: 'Install Terraform'
+
+# Authenticate to Azure and run Terraform
+- task: AzureCLI@2
+  displayName: 'Terraform: init, plan, apply'
+  inputs:
+    azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -e
+
+      echo "Azure context:"
+      az account show
+
+      # Provider registration (first run only, safe to repeat)
+      az provider register --namespace Microsoft.Resources --wait || true
+      az provider register --namespace Microsoft.Storage --wait || true
+
+      echo "Running Terraform in $(TF_DIR)..."
+      terraform -chdir=$(TF_DIR) init
+      terraform -chdir=$(TF_DIR) fmt -check
+      terraform -chdir=$(TF_DIR) validate
+
+      terraform -chdir=$(TF_DIR) plan -out tfplan
+      terraform -chdir=$(TF_DIR) apply -auto-approve tfplan
+
+      echo "Outputs:"
+      terraform -chdir=$(TF_DIR) output
